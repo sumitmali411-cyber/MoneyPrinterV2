@@ -5,15 +5,60 @@ import csv
 import time
 import glob
 import shlex
+import socket
 import zipfile
+import ipaddress
 import yagmail
 import requests
 import subprocess
 import platform
 
+from urllib.parse import urlparse
+
 from cache import *
 from status import *
 from config import *
+
+
+# Websites come from scraped search results, i.e. they are attacker-influenced.
+# Fetching them unchecked lets a crafted listing point this process at cloud
+# metadata endpoints or services bound to localhost (SSRF).
+REQUEST_TIMEOUT_SECONDS = 30
+
+
+def is_safe_public_url(url: str) -> bool:
+    """
+    Returns True only for http(s) URLs that resolve to a global-scope address.
+    Blocks loopback, private, link-local (including 169.254.169.254) and other
+    reserved ranges.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+
+    if parsed.scheme not in ("http", "https"):
+        return False
+
+    host = parsed.hostname
+    if not host:
+        return False
+
+    try:
+        resolved = socket.getaddrinfo(host, None)
+    except (socket.gaierror, UnicodeError):
+        return False
+
+    for entry in resolved:
+        address = entry[4][0]
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            return False
+        if not ip.is_global:
+            return False
+
+    return True
 
 
 class Outreach:
@@ -74,7 +119,8 @@ class Outreach:
             info("=> Scraper already unzipped. Skipping unzip.")
             return
 
-        r = requests.get(zip_link)
+        r = requests.get(zip_link, timeout=REQUEST_TIMEOUT_SECONDS)
+        r.raise_for_status()
         z = zipfile.ZipFile(io.BytesIO(r.content))
         z.extractall()
 
@@ -171,7 +217,11 @@ class Outreach:
         # Extract and set an email for a website
         email = ""
 
-        r = requests.get(website)
+        if not is_safe_public_url(website):
+            warning(f"Refusing to fetch non-public URL: {website}")
+            return
+
+        r = requests.get(website, timeout=REQUEST_TIMEOUT_SECONDS)
         if r.status_code == 200:
             # Define a regular expression pattern to match email addresses
             email_pattern = r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b"
@@ -254,8 +304,8 @@ class Outreach:
                 website = item.split(",")
                 website = [w for w in website if w.startswith("http")]
                 website = website[0] if len(website) > 0 else ""
-                if website != "":
-                    test_r = requests.get(website)
+                if website != "" and is_safe_public_url(website):
+                    test_r = requests.get(website, timeout=REQUEST_TIMEOUT_SECONDS)
                     if test_r.status_code == 200:
                         self.set_email_for_website(index, website, output_path)
 
