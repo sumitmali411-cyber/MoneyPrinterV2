@@ -16,3 +16,10 @@ faster-whisper
 srt_equalizer
 undetected_chromedriver
 platformdirs
+
+# SECURITY NOTE: Pillow is pinned to 9.5.0 because YouTube.py uses the moviepy
+# 1.x API (`from moviepy.editor import *`), and moviepy 1.0.3 calls
+# Image.ANTIALIAS, which Pillow removed in 10.0. Pillow 9.5.0 carries known
+# advisories with no fix below 12.2, so there is no safe Pillow for moviepy 1.x.
+# Resolving this means migrating to moviepy 2.x and then unpinning Pillow.
+# See the security review notes in the pull request for details.
